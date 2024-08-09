@@ -1,67 +1,212 @@
-# recruiting-rask
+# GitHub Repository Service Documentation
 
-This project uses Quarkus, the Supersonic Subatomic Java Framework.
+## Overview
 
-If you want to learn more about Quarkus, please visit its website: <https://quarkus.io/>.
+This project provides a RESTful API to fetch GitHub repository and branch information for a given user. It uses Quarkus, a Kubernetes-native Java stack tailored for OpenJDK HotSpot and GraalVM, to build and run the application.
 
-## Running the application in dev mode
+## Project Structure
 
-You can run your application in dev mode that enables live coding using:
+### `GitRepositoryProxy`
 
-```shell script
-./mvnw compile quarkus:dev
+This interface defines the REST client for interacting with the GitHub API.
+
+```java
+package org.task;
+
+import jakarta.ws.rs.GET;
+import jakarta.ws.rs.Path;
+import jakarta.ws.rs.PathParam;
+import jakarta.ws.rs.Produces;
+import jakarta.ws.rs.core.MediaType;
+import org.eclipse.microprofile.rest.client.inject.RegisterRestClient;
+import java.util.List;
+
+@Path("/")
+@RegisterRestClient(baseUri = "https://api.github.com")
+public interface GitRepositoryProxy {
+
+    @GET
+    @Path("/users/{username}/repos")
+    @Produces(MediaType.APPLICATION_JSON)
+    List<RepositoryModel> getRepositories(@PathParam("username") String username);
+
+    @GET
+    @Path("/repos/{owner}/{repoName}/branches")
+    @Produces(MediaType.APPLICATION_JSON)
+    List<BranchModel> getBranches(@PathParam("owner") String owner, @PathParam("repoName") String repo);
+}
 ```
 
-> **_NOTE:_**  Quarkus now ships with a Dev UI, which is available in dev mode only at <http://localhost:8080/q/dev/>.
+### `GitRepositoryService`
 
-## Packaging and running the application
+This service class handles the business logic for fetching repository and branch data from GitHub.
 
-The application can be packaged using:
+```java
+package org.task;
 
-```shell script
-./mvnw package
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
+import org.eclipse.microprofile.rest.client.inject.RestClient;
+import org.task.model.BranchesModel;
+import org.task.model.LastCommit;
+import org.task.model.ResponseModel;
+
+import java.util.ArrayList;
+import java.util.List;
+
+@ApplicationScoped
+public class GitRepositoryService {
+
+    @Inject
+    @RestClient
+    GitRepositoryProxy gitRepositoryProxy;
+
+    ArrayList<ResponseModel> getData(String username) throws Exception {
+        ArrayList<BranchesModel> branches = new ArrayList<>();
+        ArrayList<ResponseModel> responseModels = new ArrayList<>();
+
+        ArrayList<JsonNode> responses = gitRepositoryProxy.getRepositories(username);
+
+        for (JsonNode response : responses) {
+            String repoName = response.get("name").asText();
+            boolean isFolked = response.get("fork").asBoolean();
+            ArrayList<JsonNode> branchesResponse = gitRepositoryProxy.getBranches(username, repoName);
+
+            if (!isFolked) {
+                for (JsonNode branch : branchesResponse) {
+                    branches.add(new BranchesModel(branch.get("name").asText(), new LastCommit(branch.get("commit").get("sha").asText())));
+                }
+                responseModels.add(new ResponseModel(username, repoName, branches));
+            }
+        }
+        return responseModels;
+    }
+}
 ```
 
-It produces the `quarkus-run.jar` file in the `target/quarkus-app/` directory.
-Be aware that it’s not an _über-jar_ as the dependencies are copied into the `target/quarkus-app/lib/` directory.
+### `GitRepositoryResource`
 
-The application is now runnable using `java -jar target/quarkus-app/quarkus-run.jar`.
+This resource class exposes the RESTful endpoints to the clients.
 
-If you want to build an _über-jar_, execute the following command:
+```java
+package org.task;
 
-```shell script
-./mvnw package -Dquarkus.package.jar.type=uber-jar
+import jakarta.inject.Inject;
+import jakarta.ws.rs.GET;
+import jakarta.ws.rs.Path;
+import jakarta.ws.rs.PathParam;
+import jakarta.ws.rs.Produces;
+import jakarta.ws.rs.core.MediaType;
+import jakarta.ws.rs.core.Response;
+import org.task.model.NotFoundModel;
+import org.task.model.ResponseModel;
+
+import java.util.ArrayList;
+
+@Path("/github")
+@Produces(MediaType.APPLICATION_JSON)
+public class GitRepositoryResource {
+
+    @Inject
+    GitRepositoryService gitRepositoryService;
+
+    @GET
+    @Path("/{username}")
+    public Response getRepositories(@PathParam("username") String username) {
+        if (username == null || username.isEmpty()) {
+            return Response.status(Response.Status.BAD_REQUEST).entity(new NotFoundModel(Response.Status.BAD_REQUEST.getStatusCode(), "Username is required")).build();
+        }
+        try {
+            ArrayList<ResponseModel> responseModels = gitRepositoryService.getData(username);
+            return Response.ok(responseModels).build();
+        } catch (Exception e) {
+            return Response.status(Response.Status.NOT_FOUND).entity(new NotFoundModel(Response.Status.NOT_FOUND.getStatusCode(), e.getMessage())).build();
+        }
+    }
+}
 ```
 
-The application, packaged as an _über-jar_, is now runnable using `java -jar target/*-runner.jar`.
+### `NotFoundModel`
 
-## Creating a native executable
+This model class represents the error response when a resource is not found.
 
-You can create a native executable using:
+```java
+package org.task.model;
 
-```shell script
-./mvnw package -Dnative
+import com.fasterxml.jackson.annotation.JsonProperty;
+
+public class NotFoundModel {
+    @JsonProperty
+    private int status;
+
+    @JsonProperty
+    private String message;
+
+    public NotFoundModel(int status, String message) {
+        this.status = status;
+        this.message = message;
+    }
+
+    public int getStatus() {
+        return status;
+    }
+
+    public String getMessage() {
+        return message;
+    }
+}
 ```
 
-Or, if you don't have GraalVM installed, you can run the native executable build in a container using:
+### `application.properties`
 
-```shell script
-./mvnw package -Dnative -Dquarkus.native.container-build=true
+Configuration file for the Quarkus application.
+
+```ini
+quarkus.http.port=8085
 ```
 
-You can then execute your native executable with: `./target/recruiting-rask-1.0-SNAPSHOT-runner`
+## Running the Application
 
-If you want to learn more about building native executables, please consult <https://quarkus.io/guides/maven-tooling>.
+1. **Build the project**: Use Maven to build the project.
+   ```sh
+   mvn clean install
+   ```
 
-## Related Guides
+2. **Run the application**: Start the Quarkus application.
+   ```sh
+   mvn quarkus:dev
+   ```
 
-- REST Jackson ([guide](https://quarkus.io/guides/rest#json-serialisation)): Jackson serialization support for Quarkus
-  REST. This extension is not compatible with the quarkus-resteasy extension, or any of the extensions that depend on it
+3. **Access the API**: The application will be running on port `8085`. You can access the API at `http://localhost:8085/github/{username}`.
 
-## Provided Code
+## API Endpoints
 
-### REST
+### Get Repositories
 
-Easily start your REST Web Services
+- **URL**: `/github/{username}`
+- **Method**: `GET`
+- **Path Parameters**:
+  - `username` (string): GitHub username.
+- **Responses**:
+  - `200 OK`: Returns a list of repositories and their branches.
+  - `400 Bad Request`: If the username is not provided.
+  - `404 Not Found`: If the user or repositories are not found.
 
-[Related guide section...](https://quarkus.io/guides/getting-started-reactive#reactive-jax-rs-resources)
+## Error Handling
+
+- **400 Bad Request**: Returned when the username is not provided.
+- **404 Not Found**: Returned when the user or repositories are not found.
+
+## Dependencies
+
+- **Quarkus**: Framework for building Java applications.
+- **RESTEasy Reactive**: For building RESTful web services.
+- **Jackson**: For JSON processing.
+- **MicroProfile Rest Client**: For making RESTful web service calls.
+
+## Conclusion
+
+This project demonstrates how to build a RESTful API using Quarkus to interact with the GitHub API. It includes error handling and proper response formatting to ensure a robust and user-friendly API.
