@@ -28,12 +28,12 @@ public interface GitRepositoryProxy {
     @GET
     @Path("/users/{username}/repos")
     @Produces(MediaType.APPLICATION_JSON)
-    List<RepositoryModel> getRepositories(@PathParam("username") String username);
+    List<JsonNode> getRepositories(@PathParam("username") String username);
 
     @GET
     @Path("/repos/{owner}/{repoName}/branches")
     @Produces(MediaType.APPLICATION_JSON)
-    List<BranchModel> getBranches(@PathParam("owner") String owner, @PathParam("repoName") String repo);
+    List<JsonNode> getBranches(@PathParam("owner") String owner, @PathParam("repoName") String repo);
 }
 ```
 
@@ -42,46 +42,55 @@ public interface GitRepositoryProxy {
 This service class handles the business logic for fetching repository and branch data from GitHub.
 
 ```java
-package org.task;
-
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
+import jakarta.ws.rs.core.Response;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
-import org.task.model.BranchesModel;
-import org.task.model.LastCommit;
-import org.task.model.ResponseModel;
+import org.model.BranchModel;
+
+import org.model.GitHubRepositoryResponseModel;
+import org.model.NotFoundModel;
+import org.model.RepositoryModel;
 
 import java.util.ArrayList;
 import java.util.List;
 
+
 @ApplicationScoped
-public class GitRepositoryService {
+public class GitHubRepository {
 
     @Inject
     @RestClient
-    GitRepositoryProxy gitRepositoryProxy;
+    GitHubRepoProxy proxy;
 
-    ArrayList<ResponseModel> getData(String username) throws Exception {
-        ArrayList<BranchesModel> branches = new ArrayList<>();
-        ArrayList<ResponseModel> responseModels = new ArrayList<>();
+    public List<GitHubRepositoryResponseModel> getRepositoriesWithBranches(String username) {
+        List<GitHubRepositoryResponseModel> responseModels = new ArrayList<>();
+        List<RepositoryModel> repositories = proxy.getRepositories(username);
 
-        ArrayList<JsonNode> responses = gitRepositoryProxy.getRepositories(username);
+        if (repositories.isEmpty()) {
+            NotFoundModel notFoundModel = new NotFoundModel(Response.Status.NOT_FOUND.getStatusCode(), "User not found");
+            responseModels.add(new GitHubRepositoryResponseModel(notFoundModel));
+            return responseModels;
+        }
 
-        for (JsonNode response : responses) {
-            String repoName = response.get("name").asText();
-            boolean isFolked = response.get("fork").asBoolean();
-            ArrayList<JsonNode> branchesResponse = gitRepositoryProxy.getBranches(username, repoName);
+        for (RepositoryModel repo : repositories) {
+            if (!repo.fork) {
+                try {
+                    ArrayList<BranchModel> branches = proxy.getBranches(username, repo.name);
+                    List<BranchModel> branchModels = new ArrayList<>();
 
-            if (!isFolked) {
-                for (JsonNode branch : branchesResponse) {
-                    branches.add(new BranchesModel(branch.get("name").asText(), new LastCommit(branch.get("commit").get("sha").asText())));
+                    // Correctly extract the sha
+                    for (BranchModel branch : branches) {
+
+                        branchModels.add(new BranchModel(branch.name, branch.commit.sha));
+                    }
+                    responseModels.add(new GitHubRepositoryResponseModel(username, repo.name, branchModels));
+                } catch (Exception e) {
+                    System.err.println("Error fetching branches for " + repo.name + ": " + e.getMessage());
                 }
-                responseModels.add(new ResponseModel(username, repoName, branches));
             }
         }
+
         return responseModels;
     }
 }
@@ -139,24 +148,16 @@ package org.task.model;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 public class NotFoundModel {
-    @JsonProperty
-    private int status;
-
-    @JsonProperty
-    private String message;
+    
+    public int status;
+    public String message;
 
     public NotFoundModel(int status, String message) {
         this.status = status;
         this.message = message;
     }
 
-    public int getStatus() {
-        return status;
-    }
-
-    public String getMessage() {
-        return message;
-    }
+  
 }
 ```
 
