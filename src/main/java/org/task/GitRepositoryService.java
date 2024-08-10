@@ -36,7 +36,7 @@ public class GitRepositoryService {
                for (JsonNode branch : branchesResponse) {
                    branches.add(new BranchesModel(branch.get("name").asText(), new LastCommit(branch.get("commit").get("sha").asText())));
                }
-               responseModels.add(new ResponseModel(username, repoName, branches));
+               responseModels.add(new ResponseModel(repoName,username, branches));
                branches = new ArrayList<>();
            }
         }
