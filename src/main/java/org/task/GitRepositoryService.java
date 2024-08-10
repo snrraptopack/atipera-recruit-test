@@ -37,10 +37,10 @@ public class GitRepositoryService {
                    branches.add(new BranchesModel(branch.get("name").asText(), new LastCommit(branch.get("commit").get("sha").asText())));
                }
                responseModels.add(new ResponseModel(username, repoName, branches));
+               branches = new ArrayList<>();
            }
         }
         return responseModels;
     }
-
 
 }
